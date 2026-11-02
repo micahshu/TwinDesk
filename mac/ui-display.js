@@ -48,6 +48,12 @@ UI.tab({
     }, 'small');
     const virtRow = UI.row('TwinDesk virtual display', '', [virtOn]);
     const sizeRow = UI.row('Size', '', [preset, applyBtn]);
+    // Two: a second virtual display of the same size, in a second window on the PC.
+    const count = UI.segmented([
+      { value: 1, label: 'One' },
+      { value: 2, label: 'Two' },
+    ], (v) => api.setVirtual({ count: Number(v) }));
+    const countRow = UI.row('Screens on {name}', '', [count]);
 
     const streamSize = UI.select([
       { value: 1080, label: '1080p, fastest' },
@@ -90,7 +96,7 @@ UI.tab({
     body.append(
       helperNote,
       UI.card('Screen', [modeRow, displayRow]),
-      UI.card('Virtual display', [virtRow, sizeRow]),
+      UI.card('Virtual display', [virtRow, sizeRow, countRow]),
       UI.card('Picture', [
         UI.row('Resolution', '', [streamSize]),
         UI.row('Quality', '', [quality]),
@@ -109,7 +115,7 @@ UI.tab({
 
       display.options([
         { value: 'virtual', label: 'TwinDesk virtual display' },
-        ...sh.displays.filter((d) => !d.virtual).map((d) => ({ value: d.id, label: `${d.label}${d.primary ? ' (main)' : ''}` })),
+        ...sh.displays.filter((d) => d.virtualIndex == null).map((d) => ({ value: d.id, label: `${d.label}${d.primary ? ' (main)' : ''}` })),
       ]);
       const picked = sh.displays.find((d) => d.id === sh.displayId && !d.virtual);
       display.set(picked ? picked.id : 'virtual');
@@ -123,6 +129,11 @@ UI.tab({
       }
       const vd = sh.displays.find((d) => d.virtual);
       virtRow.setHint(v.error ? `Couldn’t create it: ${v.error}` : vd ? `On, ${vd.width} × ${vd.height}${vd.pixelWidth !== vd.width ? ` (${vd.pixelWidth} × ${vd.pixelHeight} px)` : ''}` : v.enabled ? 'On while sharing' : '');
+      count.set(v.count === 2 ? 2 : 1);
+      const st2 = s.stream2;
+      countRow.setHint(v.count !== 2 ? 'Two adds a second virtual display, in its own window on {name}'
+        : !v.enabled ? 'Two needs the virtual display (Extend)'
+          : `Second window: ${st2 ? UI.fill(STATUS[st2.status] || st2.status) : 'Off'}${st2 && st2.status === 'live' ? `, ${st2.width} × ${st2.height} · ${st2.fps} fps` : ''}`);
 
       streamSize.set(sh.streamMaxHeight || 0);
       quality.set(sh.bitrateMbps);

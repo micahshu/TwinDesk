@@ -34,6 +34,9 @@ function startServices({ server, getSettings, pushState, onHelperReady }) {
   const displays = new Displays(helper, s);
   const hub = new AudioHub(helper, s);
   const stream = new Stream(server, displays, s, hub);
+  // The second virtual display's window on the PC (settings.virtual.count 2): idle until the PC asks
+  // for it with screen.policy {sid: 1}. stream.restart() and stop() reach it too.
+  stream.followers.push(new Stream(server, displays, s, hub, 1));
   let kvm = null;
   // Stream input only when "Receive input" is on and shared input is home.
   const input = new Input(server, helper, displays, {
@@ -61,7 +64,7 @@ function startServices({ server, getSettings, pushState, onHelperReady }) {
   const wake = new Wake({ server, getSettings: s, saveSettings: () => store.saveSettings(s()) });
   kvm.blockEdge = () => pcView.focused || pcApps.focused; // moving inside the PC window never crosses to the PC
 
-  for (const x of [stream, clipboard, kvm, terminal, drop, fileSend, smb, apps, sshClient, audio, pcView, pcApps, notifs, fileClip, wake, appSend]) x.on('change', pushState);
+  for (const x of [stream, ...stream.followers, clipboard, kvm, terminal, drop, fileSend, smb, apps, sshClient, audio, pcView, pcApps, notifs, fileClip, wake, appSend]) x.on('change', pushState);
   displays.on('change', () => {
     input.releaseAll(); // the shared display moved or changed size mid-press
     pushState();

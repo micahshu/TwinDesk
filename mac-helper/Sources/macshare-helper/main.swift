@@ -36,7 +36,14 @@ func replyError(_ id: Any?, _ message: String) {
   emit(["id": id!, "ok": false, "error": message])
 }
 
-let virtualDisplay = VirtualDisplay()
+// Virtual displays by index (0 = the TwinDesk display, 1 = a second one), made on first use.
+var virtualDisplays: [Int: VirtualDisplay] = [:]
+func virtualDisplay(_ index: Int) -> VirtualDisplay {
+  if let d = virtualDisplays[index] { return d }
+  let d = VirtualDisplay(index: index)
+  virtualDisplays[index] = d
+  return d
+}
 let injector = Injector()
 let pasteboardWatch = PasteboardWatch()
 
@@ -163,7 +170,8 @@ func handle(_ line: String) {
     let hiDPI = (msg["hiDPI"] as? Bool) ?? false
     let hz = (msg["hz"] as? NSNumber)?.doubleValue ?? 60
     let name = (msg["name"] as? String) ?? "TwinDesk"
-    virtualDisplay.create(width: width, height: height, hiDPI: hiDPI, hz: hz, name: name) { result in
+    let index = max(0, min(7, (msg["index"] as? NSNumber)?.intValue ?? 0))
+    virtualDisplay(index).create(width: width, height: height, hiDPI: hiDPI, hz: hz, name: name) { result in
       switch result {
       case .success(let info): reply(id, info)
       case .failure(let err): replyError(id, err.message)
@@ -247,7 +255,7 @@ func handle(_ line: String) {
     DragIn.shared.written(drag: (msg["drag"] as? String) ?? "", index: (msg["index"] as? NSNumber)?.intValue ?? -1,
                           error: msg["error"] as? String)
   case "destroyDisplay":
-    virtualDisplay.destroy()
+    virtualDisplays[(msg["index"] as? NSNumber)?.intValue ?? 0]?.destroy()
     reply(id)
   case "bleStart":
     BlePeripheral.shared.start(info: Data(((msg["info"] as? String) ?? "{}").utf8))
@@ -291,7 +299,7 @@ DispatchQueue.global().async {
   DispatchQueue.main.async {
     Capture.shared.stopCapture(side: nil, offset: nil) // also shows the pointer again
     injector.releaseAll()
-    virtualDisplay.destroy()
+    virtualDisplays.values.forEach { $0.destroy() }
     exit(0)
   }
 }

@@ -233,7 +233,7 @@ const UI = {
 
   // Live Details card: labels → value cells. set({label: text}) fills
   // them; rows without a value are hidden.
-  details(labels) {
+  details(labels, title = 'Details') {
     const vals = {};
     const rows = labels.map((label) => {
       const r = UI.row(label, '');
@@ -241,7 +241,7 @@ const UI = {
       r.querySelector('.controls').append(vals[label]);
       return r;
     });
-    const card = UI.card('Details', rows);
+    const card = UI.card(title, rows);
     card.set = (map) => labels.forEach((label, i) => {
       const t = map[label];
       vals[label].textContent = t == null ? '' : String(t);

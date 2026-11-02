@@ -1,22 +1,26 @@
 // TwinDesk — Copyright (C) 2026 inukaasith. GPL-3.0, see LICENSE.
-// The TwinDesk virtual display (via mac-helper), the display list, and which display is shared.
+// The TwinDesk virtual displays (via mac-helper), the display list, and which display is shared.
 // settings.sharing.displayId: null = the TwinDesk virtual display (falls back to the main
 // display when it is off), otherwise an Electron display id (= CGDirectDisplayID).
+// settings.virtual.count 2 adds a second virtual display, shown in its own window on the PC
+// (stream sid 1, target(1)); it is never the one `sharing.displayId` picks.
 //
-// Events: 'change' — displays were added/removed/resized or the virtual display changed.
+// Events: 'change' — displays were added/removed/resized or a virtual display changed.
 'use strict';
 
 const { screen } = require('electron');
 const { EventEmitter } = require('events');
 
 const WAIT_DISPLAY_MS = 5000;
+const MAX_VIRTUAL = 2;
 
 class Displays extends EventEmitter {
   constructor(helper, getSettings) {
     super();
     this.helper = helper;
     this.getSettings = getSettings;
-    this.virtualId = null; // CGDirectDisplayID of our virtual display, when it exists
+    this.virtualIds = []; // CGDirectDisplayID of each virtual display by index (null: not there)
+    this.virtualKeys = [];
     this.virtualError = null;
     this.applying = null;
     this.changeTimer = null;
@@ -24,18 +28,30 @@ class Displays extends EventEmitter {
     screen.on('display-added', changed);
     screen.on('display-removed', changed);
     screen.on('display-metrics-changed', changed);
-    helper.on('event', (name) => {
+    helper.on('event', (name, msg) => {
       if (name === 'displayTerminated') {
-        this.virtualId = null;
-        this.virtualKey = '';
+        const i = msg && Number.isInteger(msg.index) ? msg.index : 0;
+        this.virtualIds[i] = null;
+        this.virtualKeys[i] = '';
         this._changed();
       }
     });
     helper.on('exit', () => {
-      this.virtualId = null;
-      this.virtualKey = '';
+      this.virtualIds = [];
+      this.virtualKeys = [];
       this._changed();
     });
+  }
+
+  // The TwinDesk virtual display (index 0), when it exists.
+  get virtualId() {
+    return this.virtualIds[0] ?? null;
+  }
+
+  // How many virtual displays to keep: settings.virtual.count, but one while a phone views Extend.
+  virtualCount() {
+    if (this.override) return 1;
+    return Math.max(1, Math.min(MAX_VIRTUAL, this.getSettings().virtual.count | 0 || 1));
   }
 
   _changed() {
@@ -54,34 +70,22 @@ class Displays extends EventEmitter {
     if (v.enabled && this.getSettings().sharing.on) this.applyVirtual();
   }
 
-  // Create, re-create or remove the virtual display to match settings.virtual. Serialized.
+  // Create, re-create or remove the virtual displays to match settings.virtual. Serialized.
   applyVirtual() {
     const run = async () => {
       const v = this.getSettings().virtual;
       this.virtualError = null;
       try {
-        // The virtual display exists only while this Mac's screen is shared (no empty extra monitor).
-        if (!v.enabled || !this.getSettings().sharing.on) {
-          if (this.virtualId !== null) await this.helper.request('destroyDisplay');
-          this.virtualId = null;
-          this.virtualKey = '';
-          return;
+        // The virtual displays exist only while this Mac's screen is shared (no empty extra monitor).
+        const n = v.enabled && this.getSettings().sharing.on ? this.virtualCount() : 0;
+        for (let i = this.virtualIds.length - 1; i >= n; i--) {
+          if (this.virtualIds[i] != null) await this.helper.request('destroyDisplay', { index: i });
         }
-        const size = this.override || v;
-        // Already there as asked: keep it (re-creating it pulls it from under a capture that just
-        // started on it; several callers apply at once when sharing starts).
-        const key = JSON.stringify([size.width, size.height, !!size.hiDPI, v.hz || 60]);
-        if (this.virtualId !== null && key === this.virtualKey && screen.getAllDisplays().some((d) => d.id === this.virtualId)) return;
-        const r = await this.helper.request('createDisplay', {
-          width: size.width, height: size.height, hiDPI: !!size.hiDPI, hz: v.hz || 60, name: 'TwinDesk',
-        });
-        this.virtualId = r.displayId;
-        this.virtualKey = key;
-        console.log(`[displays] virtual display ${r.displayId}: ${size.width}x${size.height} pt, ${r.pixelWidth}x${r.pixelHeight} px`);
-        await this._waitForDisplay(r.displayId);
+        this.virtualIds.length = Math.min(this.virtualIds.length, n);
+        this.virtualKeys.length = this.virtualIds.length;
+        // A second display is the first one's size (a phone's override applies to one display only).
+        for (let i = 0; i < n; i++) await this._ensureVirtual(i, this.override || v, v.hz || 60);
       } catch (e) {
-        this.virtualId = null;
-        this.virtualKey = '';
         this.virtualError = e.message;
         console.error(`[displays] virtual display: ${e.message}`);
       } finally {
@@ -90,6 +94,28 @@ class Displays extends EventEmitter {
     };
     this.applying = (this.applying || Promise.resolve()).then(run);
     return this.applying;
+  }
+
+  async _ensureVirtual(i, size, hz) {
+    // Already there as asked: keep it (re-creating it pulls it from under a capture that just
+    // started on it; several callers apply at once when sharing starts).
+    const key = JSON.stringify([size.width, size.height, !!size.hiDPI, hz]);
+    const id = this.virtualIds[i];
+    if (id != null && key === this.virtualKeys[i] && screen.getAllDisplays().some((d) => d.id === id)) return;
+    try {
+      const r = await this.helper.request('createDisplay', {
+        index: i, width: size.width, height: size.height, hiDPI: !!size.hiDPI, hz, name: i ? `TwinDesk ${i + 1}` : 'TwinDesk',
+      });
+      this.virtualIds[i] = r.displayId;
+      this.virtualKeys[i] = key;
+      console.log(`[displays] virtual display${i ? ` ${i + 1}` : ''} ${r.displayId}: ${size.width}x${size.height} pt, ${r.pixelWidth}x${r.pixelHeight} px`);
+      await this._waitForDisplay(r.displayId);
+    } catch (e) {
+      this.virtualIds[i] = null;
+      this.virtualKeys[i] = '';
+      this.virtualError = e.message;
+      console.error(`[displays] virtual display${i ? ` ${i + 1}` : ''}: ${e.message}`);
+    }
   }
 
   _waitForDisplay(id) {
@@ -109,25 +135,32 @@ class Displays extends EventEmitter {
     });
   }
 
+  // `virtual`: the TwinDesk display (index 0); `virtualIndex`: which virtual display, null for others.
   list() {
     const primary = screen.getPrimaryDisplay().id;
-    return screen.getAllDisplays().map((d) => ({
-      id: d.id,
-      label: d.id === this.virtualId ? 'TwinDesk (virtual)' : d.label || (d.internal ? 'Built-in display' : `Display ${d.id}`),
-      width: d.size.width,
-      height: d.size.height,
-      pixelWidth: Math.round(d.size.width * d.scaleFactor),
-      pixelHeight: Math.round(d.size.height * d.scaleFactor),
-      bounds: d.bounds,
-      virtual: d.id === this.virtualId,
-      primary: d.id === primary,
-      hz: d.displayFrequency || 60,
-    }));
+    return screen.getAllDisplays().map((d) => {
+      const vi = this.virtualIds.indexOf(d.id);
+      return {
+        id: d.id,
+        label: vi === 0 ? 'TwinDesk (virtual)' : vi > 0 ? `TwinDesk (virtual ${vi + 1})` : d.label || (d.internal ? 'Built-in display' : `Display ${d.id}`),
+        width: d.size.width,
+        height: d.size.height,
+        pixelWidth: Math.round(d.size.width * d.scaleFactor),
+        pixelHeight: Math.round(d.size.height * d.scaleFactor),
+        bounds: d.bounds,
+        virtual: vi === 0,
+        virtualIndex: vi < 0 ? null : vi,
+        primary: d.id === primary,
+        hz: d.displayFrequency || 60,
+      };
+    });
   }
 
-  // The display to share right now (an entry of list()), or null.
-  target() {
+  // The display to share right now (an entry of list()), or null. sid > 0: that PC window's own
+  // virtual display, or nothing (a second window never falls back to another display).
+  target(sid = 0) {
     const all = this.list();
+    if (sid > 0) return all.find((d) => d.virtualIndex === sid) || null;
     const want = this.getSettings().sharing.displayId;
     return (
       (want != null && all.find((d) => d.id === want)) ||

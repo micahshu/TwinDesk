@@ -51,7 +51,7 @@ const DEFAULT_SETTINGS = {
   // directions, the same on both computers (pair.sync): 'fast' (shown the moment it arrives) |
   // 'smooth' (about one frame of buffer, even motion).
   sharing: { on: false, displayId: null, audio: false, remote: true, pace: 'fast' },
-  virtual: { enabled: true, width: 1920, height: 1080, hiDPI: false, hz: 60 },
+  virtual: { enabled: true, width: 1920, height: 1080, hiDPI: false, hz: 60, count: 1 }, // count 2: a second virtual display, in its own window on the PC
   bitrateMbps: 30,
   streamInput: true, // accept mouse/keyboard from Monitor 2
   streamMaxHeight: 1080, // 0 = capture at the display's pixel size; else scale down (GPU) to this height

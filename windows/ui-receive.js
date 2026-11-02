@@ -38,7 +38,10 @@ UI.tab({
     const paceRow = UI.paceRow(); // One Playback setting, synced with the other computer
     const framegen = UI.switch((v) => api.setMonitor({ framegen: v }), { label: 'Frame generation' });
 
-    const details = UI.details(['Status', 'Display', 'Picture', 'Speed', 'Round trip', 'Codec', 'Decoder', 'Delay', 'Frames dropped', 'Freezes']);
+    const ROWS = ['Status', 'Display', 'Picture', 'Speed', 'Round trip', 'Codec', 'Decoder', 'Delay', 'Frames dropped', 'Freezes'];
+    const details = UI.details(ROWS);
+    // The Mac's second virtual display (its screen.state says screens: 2), in Monitor 3.
+    const details2 = UI.details(ROWS, 'Second screen details');
 
     body.append(
       UI.card('', [
@@ -50,7 +53,20 @@ UI.tab({
         UI.row('Full screen', '', [el('kbd', { text: 'F11' })]),
       ], { cls: 'keep-on' }),
       details,
+      details2,
     );
+    const fill = (d, st, on, x, idle) => d.set({
+      Status: idle,
+      Display: on ? st.name + (st.width ? ', ' + st.width + ' × ' + st.height : x ? ', ' + x.width + ' × ' + x.height : '') : '',
+      Picture: x ? x.width + ' × ' + x.height + ', ' + x.fps + ' fps' : '',
+      Speed: x ? x.mbps + ' Mbps received' : '',
+      'Round trip': x && x.rttMs != null ? x.rttMs + ' ms' : '',
+      Codec: x ? x.codec.toUpperCase() : '',
+      Decoder: x && x.decoder ? UI.codecImpl(x.decoder, x.hw) : '',
+      Delay: x ? x.delayMs + ' ms' : '',
+      'Frames dropped': x ? x.dropped : '',
+      Freezes: x ? x.freezes || 0 : '',
+    });
 
     return (s) => {
       const st = s.stream;
@@ -75,18 +91,14 @@ UI.tab({
       paceRow.render(s);
       framegen.set(s.monitor.framegen);
       const x = on && st.stats;
-      details.set({
-        Status: !connected ? 'Not connected' : !on ? (sharing ? 'Paused, nobody watching' : 'Off') : s.macInput ? 'Live' : 'Live, view only',
-        Display: on ? st.name + (st.width ? ', ' + st.width + ' × ' + st.height : x ? ', ' + x.width + ' × ' + x.height : '') : '',
-        Picture: x ? x.width + ' × ' + x.height + ', ' + x.fps + ' fps' : '',
-        Speed: x ? x.mbps + ' Mbps received' : '',
-        'Round trip': x && x.rttMs != null ? x.rttMs + ' ms' : '',
-        Codec: x ? x.codec.toUpperCase() : '',
-        Decoder: x && x.decoder ? UI.codecImpl(x.decoder, x.hw) : '',
-        Delay: x ? x.delayMs + ' ms' : '',
-        'Frames dropped': x ? x.dropped : '',
-        Freezes: x ? x.freezes || 0 : '',
-      });
+      const live = s.macInput ? 'Live' : 'Live, view only';
+      fill(details, st, on, x, !connected ? 'Not connected' : !on ? (sharing ? 'Paused, nobody watching' : 'Off') : live);
+      const st2 = s.stream2;
+      details2.hidden = !(st2 && (st2.wanted || st2.state === 'on'));
+      if (!details2.hidden) {
+        const on2 = st2.state === 'on';
+        fill(details2, st2, on2, on2 && st2.stats, !connected ? 'Not connected' : on2 ? live : st2.watching ? 'Waiting for the picture' : 'Opens with the screen window');
+      }
     };
   },
 });

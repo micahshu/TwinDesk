@@ -204,6 +204,10 @@ function start() {
     onChange: pushState,
     isQuitting: () => quitting,
   });
+  // The Mac's second virtual display, in a window of its own (screen.js; opens and closes with Monitor 2).
+  screen.followers.push(new Screen({
+    link, clip, inputAllowed: () => !kvm || kvm.mode === 'home', settings, saveSettings, onChange: pushState, isQuitting: () => quitting, sid: 1, primary: screen,
+  }));
   loadTerminal(); // only while it's on
   sshd = new Sshd({ link, settings, save: saveSettings, onChange: pushState });
   fileDrop = new FileDrop({ link, settings, onProgress: (v) => { screen.sendDropProgress(fillAll(v)); pushState(); } });
@@ -899,6 +903,7 @@ function buildState() {
     discovery: { ...discovery.status },
     addresses: ownAddresses(),
     stream: { ...screen.state, remote: screen.remote, watching: screen.sentAccept === true },
+    stream2: { ...screen.followers[0].state, wanted: screen.followers[0].wanted(), watching: screen.followers[0].sentAccept === true },
     wake: wake.view(),
     macInput: screen.macInput, // the Mac's "Receive input" switch
     input: kvm.mode,

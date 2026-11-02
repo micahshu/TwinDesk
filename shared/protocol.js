@@ -85,7 +85,9 @@
       PING: 'ping',
       PONG: 'pong',
       BYE: 'bye', // guest->host: Disconnect on purpose (a phone gets no grace to resume; computers may connect at once)
-      // screen sharing
+      // screen sharing. stream.info/stop, rtc.* and in.* may carry `sid`: which of the Mac's virtual
+      // displays (its own window on the PC); none = 0 = Monitor 2. sid 1 is the second virtual
+      // display (Mac settings.virtual.count 2), asked for with screen.policy {sid: 1}.
       STREAM_INFO: 'stream.info',
       STREAM_STOP: 'stream.stop',
       STREAM_INPUT: 'stream.input', // Mac -> Windows: {on} whether the Mac accepts in.* ("Receive input")
@@ -190,9 +192,9 @@
       CAM_ANSWER: 'cam.answer', // viewer->sharer {sdp}
       CAM_ICE: 'cam.ice', // either way {from: 'send'|'view', candidate}
       CAM_STATE: 'cam.state', // sharer->viewer {status: 'starting'|'live'|'failed'|'refused', error?}
-      SCREEN_POLICY: 'screen.policy', // either, viewer->sharer {accept, width?, height?}: a viewer is open and wants the picture (senders capture only while it is true)
+      SCREEN_POLICY: 'screen.policy', // either, viewer->sharer {accept, width?, height?, sid?}: a viewer is open and wants the picture (senders capture only while it is true); sid: that window's stream, sent only to a sharer whose screen.state has `screens`
       SCREEN_CTL: 'screen.ctl', // either, viewer->sharer {share?, mode?: 'mirror'|'extend', close?}: start/stop or switch the other's sharing; close (with share false: the phone viewer's Close) stops it even without remote
-      SCREEN_STATE: 'screen.state', // either, sharer->viewer {on, mode, remote, modes}: what this side shares; remote = it takes screen.ctl
+      SCREEN_STATE: 'screen.state', // either, sharer->viewer {on, mode, remote, modes, screens?}: what this side shares; remote = it takes screen.ctl; screens: how many windows Extend fills (a Mac with a second virtual display: 2)
       PAIR_SYNC: 'pair.sync', // either {feature, dir: 'out'|'in', on} | {key, value} (shared value, e.g. pace) | {all: {feature: {out, in}, values: {key: value}}} (host, after welcome): two-way switches shared per pair, dirs from the sender's side
       WOL_INFO: 'wol.info', // either {macs: ['aa:bb:cc:dd:ee:ff'], address}: how to wake this computer over the network
       SMB_OFFER: 'smb.offer', // sharer->other {share, user, password, port}

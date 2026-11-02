@@ -1,5 +1,6 @@
 // TwinDesk — Copyright (C) 2026 inukaasith. GPL-3.0, see LICENSE.
-// One CGVirtualDisplay at a time (private API, header from DeskPad), plus explicit mode selection.
+// One CGVirtualDisplay per instance (private API, header from DeskPad), plus explicit mode selection.
+// main.swift keeps one instance per index: 0 is the TwinDesk display, 1 a second one.
 import Cocoa
 import VirtualDisplayBridge
 
@@ -8,6 +9,9 @@ struct HelperError: Error { let message: String }
 final class VirtualDisplay {
   private var display: CGVirtualDisplay?
   private var generation = 0
+  let index: Int
+
+  init(index: Int = 0) { self.index = index }
 
   var displayID: CGDirectDisplayID? { display?.displayID }
 
@@ -28,13 +32,13 @@ final class VirtualDisplay {
     d.sizeInMillimeters = CGSize(width: 600, height: 600.0 * Double(height) / Double(width))
     d.productID = 0x4d53
     d.vendorID = 0x4d53
-    d.serialNum = 1 // stable: macOS remembers the arrangement
+    d.serialNum = UInt32(index + 1) // stable per index: macOS remembers each one's arrangement
     d.terminationHandler = { [weak self] _, _ in
       DispatchQueue.main.async {
         guard let self = self, gen == self.generation, self.display != nil else { return }
         self.display = nil
-        log("virtual display terminated")
-        emit(["event": "displayTerminated"])
+        log("virtual display \(self.index) terminated")
+        emit(["event": "displayTerminated", "index": self.index])
       }
     }
 

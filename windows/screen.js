@@ -7,6 +7,12 @@
 // its sharing and closing it stops it again (`screen.ctl`); the Receive tab switches Extend/Mirror.
 // Monitor 2 never opens by itself (no "Open automatically"): only the Receive tab, the
 // tray or a Mac-app window open it, and nothing is sent before that.
+//
+// A Mac whose screen.state says `screens: 2` has a second virtual display: a follower Screen
+// (sid 1, `primary` = Monitor 2's) shows it in a window of its own, opened and closed with Monitor 2.
+// Its messages carry `sid`; it says screen.policy only to a Mac that sends `screens` at all (an older
+// Mac would read it as Monitor 2's). Sound, Mac-app windows, file drops and starting/stopping the
+// Mac's sharing stay with Monitor 2.
 const { BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const P = require('../shared/protocol.js');
@@ -17,9 +23,11 @@ const INPUT = new Set([T.IN_MOVE, T.IN_DOWN, T.IN_UP, T.IN_WHEEL, T.IN_KEY_DOWN,
 
 class Screen {
   // opts: link, clip, settings (shared object, .windows.monitor bounds), saveSettings(), onChange(),
-  // isQuitting(), inputAllowed() (false while KVM drives or is driven)
+  // isQuitting(), inputAllowed() (false while KVM drives or is driven); a follower also sid, primary
   constructor(opts) {
     Object.assign(this, opts);
+    this.sid = this.sid | 0;
+    this.followers = []; // Screens for the Mac's other virtual displays (main.js)
     this.state = { state: 'off', name: '', width: 0, height: 0 };
     this.win = null;
     this.ready = false; // renderer loaded and listening
@@ -32,10 +40,11 @@ class Screen {
     this.wantStart = false; // Monitor 2 opened before the peer's screen.state arrived
 
     const link = this.link;
-    link.on(T.STREAM_INFO, (m) => this._onInfo(m));
-    link.on(T.RTC_OFFER, (m) => typeof m.sdp === 'string' && this._relay(m));
-    link.on(T.RTC_ICE, (m) => this._relay(m));
-    link.on(T.STREAM_STOP, () => this._stop());
+    const mine = (m) => ((m && m.sid) | 0) === this.sid;
+    link.on(T.STREAM_INFO, (m) => mine(m) && this._onInfo(m));
+    link.on(T.RTC_OFFER, (m) => mine(m) && typeof m.sdp === 'string' && this._relay(m));
+    link.on(T.RTC_ICE, (m) => mine(m) && this._relay(m));
+    link.on(T.STREAM_STOP, (m) => mine(m) && this._stop());
     link.on(T.STREAM_INPUT, (m) => this._setMacInput(m.on !== false));
     link.on(T.SCREEN_STATE, (m) => this._onState(m));
     link.on('welcome', () => {
@@ -58,8 +67,8 @@ class Screen {
     ipcMain.on('rtc', (e, m) => {
       if (!this.win || e.sender !== this.win.webContents || this.test) return;
       if (!m) return;
-      if (FROM_RENDERER.has(m.t)) this.link.send(m);
-      else if (INPUT.has(m.t) && this.state.state === 'on' && this.macInput && this.inputAllowed()) this.link.send(m);
+      if (FROM_RENDERER.has(m.t)) this.link.send(this._tag(m));
+      else if (INPUT.has(m.t) && this.state.state === 'on' && this.macInput && this.inputAllowed()) this.link.send(this._tag(m));
     });
     ipcMain.on('drop', (e, d) => {
       if (!this.win || e.sender !== this.win.webContents || !this.fileDrop || !d || !Array.isArray(d.paths)) return;
@@ -101,22 +110,30 @@ class Screen {
     if (!this.win || this.win.isDestroyed()) this._create();
     else if (!this.win.isVisible()) this.win.show();
     else if (this.win.isMinimized()) this.win.restore();
-    this.win.focus();
+    for (const f of this.followers) if (!test && f.wanted()) f.open(false);
+    this.win.focus(); // after the followers': Monitor 2 ends up in front
     // Nothing shared over there: start it from here when it lets us (no need to touch it).
     const r = this.remote;
-    if (this.test || this.link.status.state !== 'connected') return;
+    if (this.test || this.sid || this.link.status.state !== 'connected') return;
     if (r && !r.on && r.remote) this.control({ share: true });
     else if (!r) this.wantStart = true; // its state isn't here yet (or an older app)
   }
 
+  // A follower: the Mac has a virtual display for this window (screen.state `screens`).
+  wanted() {
+    return !!(this.remote && this.remote.screens > this.sid);
+  }
 
   // Tray "Receive Screen" off: like the window's close button (stops sharing we started there).
   close() {
+    for (const f of this.followers) f.close();
     if (this.win && !this.win.isDestroyed() && this.win.isVisible()) this.win.close();
   }
 
   // screen.ctl: start/stop the peer's sharing or switch its mode (it obeys when it lets us).
+  // A follower's toolbar does it through Monitor 2's Screen.
   control({ share, mode }) {
+    if (this.primary) return this.primary.control({ share, mode });
     if (this.link.status.state !== 'connected') return;
     const m = { t: T.SCREEN_CTL };
     if (typeof share === 'boolean') m.share = share;
@@ -139,21 +156,38 @@ class Screen {
     return mon || !!(this.apps && (this.apps.windows.length || this.apps.opening.size));
   }
 
-  // screen.policy to the peer whenever `watching` changes (and after welcome).
+  // screen.policy to the peer whenever `watching` changes (and after welcome). Followers' too.
   policy() {
+    for (const f of this.followers) f.policy();
     if (this.link.status.state !== 'connected') return;
+    if (this.sid && !(this.remote && this.remote.screens)) return; // an older Mac: no sid, never ask
     const accept = this.watching();
     if (accept === this.sentAccept) return;
     this.sentAccept = accept;
-    this.link.send({ t: T.SCREEN_POLICY, accept });
+    this.link.send(this._tag({ t: T.SCREEN_POLICY, accept }));
     this.onChange();
+  }
+
+  // A message to the Mac, marked with this window's stream (none for Monitor 2: older Macs).
+  _tag(m) {
+    return this.sid ? { ...m, sid: this.sid } : m;
   }
 
   _onState(m) {
     const modes = Array.isArray(m.modes) ? m.modes.slice(0, 4).map(String) : [];
-    this.remote = { on: m.on === true, mode: String(m.mode || ''), remote: m.remote !== false, modes };
+    const had = this.wanted();
+    // screens: how many windows the Mac's Extend fills; 0 = an older Mac that doesn't say.
+    const screens = Number.isInteger(m.screens) && m.screens > 0 ? Math.min(m.screens, 4) : 0;
+    this.remote = { on: m.on === true, mode: String(m.mode || ''), remote: m.remote !== false, modes, screens };
     if (!this.remote.on) this.startedByUs = false;
-    if (this.wantStart && this.remote.remote && !this.remote.on) this.control({ share: true });
+    if (this.sid) {
+      // Opens with Monitor 2 when the Mac gains this display, closes when it loses it.
+      const p = this.primary && this.primary.win;
+      const shown = !!(this.win && !this.win.isDestroyed() && this.win.isVisible());
+      if (this.wanted() && !had && !shown && p && !p.isDestroyed() && p.isVisible()) this.open(false);
+      else if (!this.wanted() && shown) this.win.hide();
+      this.policy();
+    } else if (this.wantStart && this.remote.remote && !this.remote.on) this.control({ share: true });
     this.wantStart = false;
     this._pushRemote();
     this.onChange();
@@ -179,6 +213,7 @@ class Screen {
   // Screen sound: played only when the Mac shares it with the screen; local volume.
   // Pacing travels with it: both come from the Receive tab's settings.
   applyAudio() {
+    for (const f of this.followers) f.applyAudio();
     this._pushAudio();
   }
 
@@ -191,6 +226,7 @@ class Screen {
 
   // Input allowed changed elsewhere (KVM mode): tell the renderer.
   refreshInput() {
+    for (const f of this.followers) f.refreshInput();
     this._pushInput();
   }
 
@@ -236,15 +272,20 @@ class Screen {
 
   _title() {
     if (!this.win || this.win.isDestroyed()) return;
-    const macName = this.link.snapshot().link.macName || 'TwinDesk';
+    const macName = (this.link.snapshot().link.macName || 'TwinDesk') + (this.sid ? ' · screen ' + (this.sid + 1) : '');
     const s = this.state;
     this.win.setTitle(s.state === 'on'
       ? macName + ' (' + s.width + ' × ' + s.height + ')'
       : macName);
   }
 
+  // Where the window's bounds are saved: windows.monitor, a follower's windows.monitor3.
+  get _boundsKey() {
+    return this.sid ? 'monitor' + (this.sid + 2) : 'monitor';
+  }
+
   _create() {
-    const b = this.settings.windows.monitor || {};
+    const b = this.settings.windows[this._boundsKey] || {};
     const aspect = this.state.width && this.state.height ? this.state.width / this.state.height : 16 / 9;
     const win = new BrowserWindow({
       width: b.width || 1280,
@@ -254,7 +295,7 @@ class Screen {
       minWidth: 320,
       minHeight: 200,
       backgroundColor: '#000000',
-      title: 'Monitor 2',
+      title: 'Monitor ' + (this.sid + 2),
       icon: path.join(__dirname, 'assets', 'tray@2x.png'),
       show: false,
       webPreferences: {
@@ -292,6 +333,7 @@ class Screen {
       this._saveBounds();
       if (!this.isQuitting()) {
         e.preventDefault();
+        for (const f of this.followers) f.close(); // the second screen goes with Monitor 2
         if (win.isFullScreen()) win.setFullScreen(false);
         win.hide();
         this.wantStart = false;
@@ -307,7 +349,7 @@ class Screen {
   _saveBounds() {
     const win = this.win;
     if (!win || win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
-    this.settings.windows.monitor = win.getNormalBounds();
+    this.settings.windows[this._boundsKey] = win.getNormalBounds();
     this.saveSettings();
   }
 }
