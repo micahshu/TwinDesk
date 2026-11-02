@@ -271,10 +271,11 @@ function onScreenCtl(m) {
   if (m.share === false && m.close === true) return void (settings.sharing.on && actions.setSharing(false, 'remote'));
   if (settings.sharing.remote === false) return void (screenStateKey = '', pushState()); // re-send: remote false
   // Started from the viewer without a mode: Mirror (the virtual display doesn't always start); Extend is its switch.
-  // Two virtual displays chosen in Extend stay Extend: sharing is off after every launch (store.js), and
-  // Mirror would lose the second window. A virtual display that won't start still falls back to the main one.
-  const two = settings.virtual.enabled && settings.sharing.displayId == null && settings.virtual.count > 1;
-  const mode = m.mode === 'extend' || m.mode === 'mirror' ? m.mode : m.share === true && !settings.sharing.on && !two ? 'mirror' : null;
+  // Extend chosen stays Extend (Mirror turns the virtual display off): sharing is off after every launch
+  // (store.js), so Mirror would replace it at every restart, with its size and any second window. A virtual
+  // display that won't start still falls back to the main one (Displays.target).
+  const extend = settings.virtual.enabled && settings.sharing.displayId == null;
+  const mode = m.mode === 'extend' || m.mode === 'mirror' ? m.mode : m.share === true && !settings.sharing.on && !extend ? 'mirror' : null;
   if (mode && displayMode() !== mode) actions.setDisplayMode(mode);
   if (typeof m.share === 'boolean' && m.share !== !!settings.sharing.on) actions.setSharing(m.share, 'remote');
 }
