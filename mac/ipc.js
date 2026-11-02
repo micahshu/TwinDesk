@@ -268,7 +268,7 @@ function setupIpc(ctx) {
       settings.streamInput = !!on;
       save();
       if (!on) ctx.input.releaseAll();
-      ctx.server.sendToClient({ t: P.T.STREAM_INPUT, on: !!on }); // Windows goes view-only when off
+      ctx.server.sendToClient({ t: P.T.STREAM_INPUT, on: !!on && !!ctx.state.permissions.accessibility }); // Windows goes view-only when off (main.js streamInputOn)
     },
     // null = the TwinDesk virtual display
     selectDisplay(displayId) {

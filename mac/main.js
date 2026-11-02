@@ -297,9 +297,18 @@ function displayMode() {
   return t.primary && !settings.virtual.enabled ? 'mirror' : 'custom';
 }
 
+// stream.input: whether the viewer's in.* move anything here. Off with "Receive input" off, and while
+// Accessibility isn't allowed: macOS drops the injected events, and Windows, which hides its own pointer
+// over the picture (the Mac's is in it), would show no pointer at all.
+function streamInputOn() {
+  return settings.streamInput !== false && !!state.permissions.accessibility;
+}
+
 function refreshPermissions() {
+  const input = streamInputOn();
   state.permissions.screen = systemPreferences.getMediaAccessStatus('screen');
   state.permissions.accessibility = systemPreferences.isTrustedAccessibilityClient(false);
+  if (peer && peer.current && streamInputOn() !== input) peer.sendToClient({ t: P.T.STREAM_INPUT, on: streamInputOn() });
   if (svc && svc.helper.running) {
     svc.helper.request('permissions').then((r) => {
       state.permissions.inputMonitoring = !!r.inputMonitoring;
@@ -522,7 +531,7 @@ app.whenReady().then(() => {
   peer = new Peer(server, link);
   peer.on('client', (ctx) => {
     console.log(`[peer] session with ${ctx.name} (${ctx.os}, ${ctx.role === 'host' ? 'we are its guest' : 'it is our guest'})`);
-    peer.send(ctx, { t: P.T.STREAM_INPUT, on: settings.streamInput !== false });
+    peer.send(ctx, { t: P.T.STREAM_INPUT, on: streamInputOn() });
     screenStateKey = ''; // a new connection (one replacing the same device's too) hears screen.state: its Extend/Mirror
     pushState();
   });
@@ -726,11 +735,13 @@ app.whenReady().then(() => {
     readDefaultIf();
     pushState();
   }, 5000); // addresses change when the network does
-  // While Setup shows something missing, notice the grant without waiting for a window focus.
+  // While Setup shows something missing, notice the grant without waiting for a window focus; without
+  // Accessibility, also while a viewer is connected (its input comes back on with the grant, streamInputOn).
   setInterval(() => {
     const p = state.permissions;
     const missing = p.screen !== 'granted' || !p.accessibility || p.inputMonitoring === false;
-    if (missing && win && !win.isDestroyed() && win.isVisible()) refreshPermissions();
+    const shown = win && !win.isDestroyed() && win.isVisible();
+    if (missing && (shown || (!p.accessibility && peer && peer.current))) refreshPermissions();
   }, 3000);
 });
 
