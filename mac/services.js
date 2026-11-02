@@ -37,6 +37,7 @@ function startServices({ server, getSettings, pushState, onHelperReady }) {
   // The second virtual display's window on the PC (settings.virtual.count 2): idle until the PC asks
   // for it with screen.policy {sid: 1}. stream.restart() and stop() reach it too.
   stream.followers.push(new Stream(server, displays, s, hub, 1));
+  displays.screens = 1 + stream.followers.length;
   let kvm = null;
   // Stream input only when "Receive input" is on and shared input is home.
   const input = new Input(server, helper, displays, {

@@ -3,7 +3,8 @@
 // settings.sharing.displayId: null = the TwinDesk virtual display (falls back to the main
 // display when it is off), otherwise an Electron display id (= CGDirectDisplayID).
 // settings.virtual.count 2 adds a second virtual display, shown in its own window on the PC
-// (stream sid 1, target(1)); it is never the one `sharing.displayId` picks.
+// (stream sid 1, target(1)); it is never the one `sharing.displayId` picks, and exists only
+// where there is a Stream to show it (`screens`, set by services.js; Multi-device mode has one).
 //
 // Events: 'change' — displays were added/removed/resized or a virtual display changed.
 'use strict';
@@ -12,7 +13,6 @@ const { screen } = require('electron');
 const { EventEmitter } = require('events');
 
 const WAIT_DISPLAY_MS = 5000;
-const MAX_VIRTUAL = 2;
 
 class Displays extends EventEmitter {
   constructor(helper, getSettings) {
@@ -21,6 +21,7 @@ class Displays extends EventEmitter {
     this.getSettings = getSettings;
     this.virtualIds = []; // CGDirectDisplayID of each virtual display by index (null: not there)
     this.virtualKeys = [];
+    this.screens = 1; // how many virtual displays this app can stream: one per PC window
     this.virtualError = null;
     this.applying = null;
     this.changeTimer = null;
@@ -48,10 +49,11 @@ class Displays extends EventEmitter {
     return this.virtualIds[0] ?? null;
   }
 
-  // How many virtual displays to keep: settings.virtual.count, but one while a phone views Extend.
+  // How many virtual displays to keep: settings.virtual.count, up to one per PC window; one while a
+  // phone views Extend or another display is picked to share (nothing would show the second).
   virtualCount() {
-    if (this.override) return 1;
-    return Math.max(1, Math.min(MAX_VIRTUAL, this.getSettings().virtual.count | 0 || 1));
+    if (this.override || this.getSettings().sharing.displayId != null) return 1;
+    return Math.max(1, Math.min(this.screens, this.getSettings().virtual.count | 0 || 1));
   }
 
   _changed() {
@@ -113,7 +115,7 @@ class Displays extends EventEmitter {
     } catch (e) {
       this.virtualIds[i] = null;
       this.virtualKeys[i] = '';
-      this.virtualError = e.message;
+      this.virtualError = i ? `second display: ${e.message}` : e.message;
       console.error(`[displays] virtual display${i ? ` ${i + 1}` : ''}: ${e.message}`);
     }
   }

@@ -29,8 +29,11 @@ const streams = [];
 function handleDisplayMedia() {
   if (streams.length > 1) return;
   session.defaultSession.setDisplayMediaRequestHandler(async (req, cb) => {
-    const st = streams.find((s) => s._owns(req.frame)) || streams[0];
+    // No frame to go by (it went away): only a lone capture window can be the one asking.
+    const live = streams.filter((s) => s.win && !s.win.isDestroyed());
+    const st = streams.find((s) => s._owns(req.frame)) || (live.length === 1 ? live[0] : null);
     try {
+      if (!st) throw new Error('the asking capture window is gone');
       cb({ video: await st._source() });
     } catch (e) {
       console.error(`[stream] no capture source: ${e.message}`);
@@ -48,6 +51,7 @@ class Stream extends EventEmitter {
     this.hub = hub; // shared system-audio capture (audiohub.js)
     this.sid = sid;
     this.followers = []; // other Streams that restart() and stop() reach (services.js)
+    this.asked = !sid; // the PC asked for this window on this connection (a screen.policy with its sid)
     this.audio = { on: false, error: null }; // sound travelling with the screen
     this.win = null;
     this.session = 0;
@@ -64,18 +68,20 @@ class Stream extends EventEmitter {
     // A second window is never assumed: it waits for its own screen.policy.
     server.on('client', () => {
       this.viewer = sid ? false : null;
+      this.asked = !sid;
       this.waitingPolicy = !sid;
       clearTimeout(this.policyTimer);
       if (!sid) {
         this.policyTimer = setTimeout(() => {
           this.waitingPolicy = false;
-          if (this.viewer === null) this.restart('older viewer');
+          if (this.viewer === null) this.restartOwn('older viewer');
         }, 1500);
       }
       this._stopWindow(this.getSettings().sharing.on ? 'no viewer' : 'off');
     });
     server.on(`t:${P.T.SCREEN_POLICY}`, (msg) => {
       if ((msg.sid | 0) !== sid) return;
+      this.asked = true;
       const on = !!msg.accept;
       // A phone's viewer says how big it is: Extend becomes a screen of that shape.
       const c = this.server.current;
@@ -87,7 +93,7 @@ class Stream extends EventEmitter {
       clearTimeout(this.policyTimer);
       if (on === this.viewer) return;
       this.viewer = on;
-      if (on) this.restart('viewer open');
+      if (on) this.restartOwn('viewer open');
       else if (this.active) this._stopWindow('no viewer');
       else this._setStatus(this.getSettings().sharing.on ? 'no viewer' : 'off');
     });
@@ -102,7 +108,7 @@ class Stream extends EventEmitter {
     // path has no candidates for the new one and never connects. Start again on this one.
     server.on('transport', (c) => {
       const moved = this.active ? this.active.transport !== c.transport : this.view.status === 'waiting for Wi-Fi' && c.transport !== 'ble';
-      if (moved) this.restart(`moved to ${c.transport === 'ble' ? 'Bluetooth' : 'Wi-Fi'}`);
+      if (moved) this.restartOwn(`moved to ${c.transport === 'ble' ? 'Bluetooth' : 'Wi-Fi'}`);
     });
     server.on(`t:${P.T.RTC_ANSWER}`, (msg) => (msg.sid | 0) === sid && this._toWindow('remote', msg));
     server.on(`t:${P.T.RTC_ICE}`, (msg) => (msg.sid | 0) === sid && this._toWindow('remote', msg));
@@ -184,14 +190,20 @@ class Stream extends EventEmitter {
 
   _scheduleRetry() {
     clearTimeout(this.retryTimer);
-    this.retryTimer = setTimeout(() => this.restart('retry'), RETRY_MS);
+    this.retryTimer = setTimeout(() => this.restartOwn('retry'), RETRY_MS);
   }
 
-  // Start a fresh WebRTC session (or stop, if sharing is off or no PC is connected).
-  async restart(reason) {
-    for (const f of this.followers) f.restart(reason);
+  // Start fresh sessions in every PC window: sharing came on, the helper restarted, or a setting
+  // they all use changed.
+  restart(reason) {
+    for (const f of this.followers) f.restartOwn(reason);
+    return this.restartOwn(reason);
+  }
+
+  // Start a fresh WebRTC session for this window only (or stop, if sharing is off or no PC is connected).
+  async restartOwn(reason) {
     clearTimeout(this.retryTimer);
-    if (!this.getSettings().sharing.on) return this.stop('off');
+    if (!this.getSettings().sharing.on) return this._stopSid('off');
     if (!this.server.current) return this._stopWindow('nothing connected');
     if (this.viewer === false || this.waitingPolicy) return this._stopWindow('no viewer');
     // Bluetooth can't carry the picture: it starts once the session is on Wi-Fi (netlink.js, 'transport').
@@ -258,9 +270,9 @@ class Stream extends EventEmitter {
   _displaysChanged() {
     const t = this.displays.target(this.sid);
     // A second window being watched starts once its display exists (count switched to 2).
-    if (!this.active) return void (this.sid && t && this.viewer && this.restart('display added'));
+    if (!this.active) return void (this.sid && t && this.viewer && this.restartOwn('display added'));
     if (!t || t.id !== this.active.displayId || t.pixelWidth !== this.active.width || t.pixelHeight !== this.active.height) {
-      this.restart('display changed');
+      this.restartOwn('display changed');
     }
   }
 
@@ -280,8 +292,9 @@ class Stream extends EventEmitter {
     this._stopSid(status);
   }
 
+  // A second window's stop goes only to a PC that asked for it (an older one has no such window).
   _stopSid(status) {
-    if (this.server.current) this.server.sendToClient(this._tag({ t: P.T.STREAM_STOP }));
+    if (this.server.current && this.asked) this.server.sendToClient(this._tag({ t: P.T.STREAM_STOP }));
     this._stopWindow(status);
   }
 }

@@ -257,7 +257,7 @@ function sendScreenState() {
   const c = peer && peer.current;
   if (!c || !svc) return void (screenStateKey = '');
   // screens: how many windows Extend fills on the viewer (a second virtual display, sid 1).
-  const screens = settings.virtual.enabled && settings.sharing.displayId == null ? svc.displays.virtualCount() : 1;
+  const screens = settings.virtual.enabled ? svc.displays.virtualCount() : 1;
   const msg = { t: P.T.SCREEN_STATE, on: !!settings.sharing.on, mode: displayMode(), remote: settings.sharing.remote !== false, modes: ['extend', 'mirror'], screens };
   const key = JSON.stringify([c.deviceId, msg]);
   if (key === screenStateKey) return;

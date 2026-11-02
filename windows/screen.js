@@ -38,6 +38,7 @@ class Screen {
     this.remote = null; // the peer's screen.state {on, mode, remote, modes}; null = not told (older app)
     this.startedByUs = false; // we switched the peer's sharing on, so closing Monitor 2 switches it off
     this.wantStart = false; // Monitor 2 opened before the peer's screen.state arrived
+    this.dismissed = false; // a follower closed by hand: it waits for Monitor 2's next open
 
     const link = this.link;
     const mine = (m) => ((m && m.sid) | 0) === this.sid;
@@ -92,7 +93,7 @@ class Screen {
       }
       if (m.fullScreen) this.win.setFullScreen(!this.win.isFullScreen());
       if (typeof m.share === 'boolean' || m.mode) this.control({ share: m.share, mode: m.mode });
-      if (m.share === false) this.close(); // Stop on the bar: nothing left to watch
+      if (m.share === false) (this.primary || this).close(); // Stop on the bar: nothing left to watch, in any window
     });
     ipcMain.on('monitor-ready', (e) => {
       if (!this.win || e.sender !== this.win.webContents) return;
@@ -107,6 +108,7 @@ class Screen {
 
   open(test) {
     this.test = !!test;
+    this.dismissed = false;
     if (!this.win || this.win.isDestroyed()) this._create();
     else if (!this.win.isVisible()) this.win.show();
     else if (this.win.isMinimized()) this.win.restore();
@@ -156,7 +158,13 @@ class Screen {
     return mon || !!(this.apps && (this.apps.windows.length || this.apps.opening.size));
   }
 
+  // Monitor 2 or a follower is watched: what keeps the screens' Wi-Fi up (main.js).
+  anyWatching() {
+    return this.watching() || this.followers.some((f) => f.watching());
+  }
+
   // screen.policy to the peer whenever `watching` changes (and after welcome). Followers' too.
+  // A follower's own changes go through Monitor 2's policy(), which main.js wraps to wait for Wi-Fi.
   policy() {
     for (const f of this.followers) f.policy();
     if (this.link.status.state !== 'connected') return;
@@ -181,12 +189,12 @@ class Screen {
     this.remote = { on: m.on === true, mode: String(m.mode || ''), remote: m.remote !== false, modes, screens };
     if (!this.remote.on) this.startedByUs = false;
     if (this.sid) {
-      // Opens with Monitor 2 when the Mac gains this display, closes when it loses it.
+      // Opens with Monitor 2 when the Mac gains this display (unless closed by hand), closes when it loses it.
       const p = this.primary && this.primary.win;
       const shown = !!(this.win && !this.win.isDestroyed() && this.win.isVisible());
-      if (this.wanted() && !had && !shown && p && !p.isDestroyed() && p.isVisible()) this.open(false);
+      if (this.wanted() && !had && !shown && !this.dismissed && p && !p.isDestroyed() && p.isVisible()) this.open(false);
       else if (!this.wanted() && shown) this.win.hide();
-      this.policy();
+      this.primary.policy();
     } else if (this.wantStart && this.remote.remote && !this.remote.on) this.control({ share: true });
     this.wantStart = false;
     this._pushRemote();
@@ -287,11 +295,14 @@ class Screen {
   _create() {
     const b = this.settings.windows[this._boundsKey] || {};
     const aspect = this.state.width && this.state.height ? this.state.width / this.state.height : 16 / 9;
+    const width = b.width || 1280;
+    const height = b.height || Math.round(1280 / aspect);
+    const at = b.width ? b : this._firstPlace(width, height);
     const win = new BrowserWindow({
-      width: b.width || 1280,
-      height: b.height || Math.round(1280 / aspect),
-      x: b.x,
-      y: b.y,
+      width,
+      height,
+      x: at.x,
+      y: at.y,
       minWidth: 320,
       minHeight: 200,
       backgroundColor: '#000000',
@@ -312,8 +323,9 @@ class Screen {
     win.streamSize = { width: this.state.width || 1920, height: this.state.height || 1080 };
     if (this.apps) this.apps.attach(win); // Mac app windows open from this renderer
     win.loadFile(path.join(__dirname, 'monitor.html'), { query: this.test ? { test: '1' } : {} });
-    win.once('ready-to-show', () => { if (!this.startHidden) win.show(); this.startHidden = false; });
-    for (const ev of ['show', 'hide', 'minimize', 'restore', 'closed']) win.on(ev, () => this.policy());
+    // A follower shows without taking the focus: Monitor 2 stays in front.
+    win.once('ready-to-show', () => { if (!this.startHidden) (this.sid ? win.showInactive() : win.show()); this.startHidden = false; });
+    for (const ev of ['show', 'hide', 'minimize', 'restore', 'closed']) win.on(ev, () => (this.primary || this).policy());
     win.on('page-title-updated', (e) => e.preventDefault());
     // Clipboard follows the focus: our text goes over on focus, the Mac's comes back on blur.
     win.on('focus', () => { if (!this.test && this.state.state === 'on') this.clip.sendIfChanged(); });
@@ -337,6 +349,7 @@ class Screen {
         if (win.isFullScreen()) win.setFullScreen(false);
         win.hide();
         this.wantStart = false;
+        this.dismissed = true;
         if (this.startedByUs) this.control({ share: false }); // we started it, so we stop it
       }
     });
@@ -344,6 +357,20 @@ class Screen {
       if (this.win === win) this.win = null;
     });
     this._title();
+  }
+
+  // Where a window with no saved place opens: Monitor 2 where Windows puts it (centred); a follower
+  // centred on another of this PC's monitors than Monitor 2's, or just below and right of it.
+  _firstPlace(width, height) {
+    const p = this.primary && this.primary.win;
+    if (!p || p.isDestroyed()) return {};
+    const { screen } = require('electron');
+    const pb = p.getBounds();
+    const mine = screen.getDisplayMatching(pb).id;
+    const other = screen.getAllDisplays().find((d) => d.id !== mine);
+    if (!other) return { x: pb.x + 48, y: pb.y + 48 };
+    const a = other.workArea;
+    return { x: Math.round(a.x + Math.max(0, a.width - width) / 2), y: Math.round(a.y + Math.max(0, a.height - height) / 2) };
   }
 
   _saveBounds() {

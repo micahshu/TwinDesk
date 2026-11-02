@@ -657,10 +657,11 @@ function setupNet(guest) {
     }), () => { smbWait = false; });
   };
   // Screens wait for Wi-Fi (WebRTC over Bluetooth would never work); each lets go when it closes.
+  // Monitor 3's changes come through here too (screen.js), so either window open holds Wi-Fi.
   const policy = screen.policy.bind(screen);
   let screenWait = false;
   screen.policy = () => {
-    if (!net.onBle || !screen.watching()) return policy();
+    if (!net.onBle || !screen.anyWatching()) return policy();
     if (screenWait) return;
     screenWait = true;
     waitWifi('screen', () => { screenWait = false; policy(); }, () => { screenWait = false; });
@@ -670,7 +671,7 @@ function setupNet(guest) {
   viaWifi(peerApps, 'launch', 'apps');
   viaWifi(apps, 'launch', 'apps');
   setInterval(() => {
-    if (!screen.watching()) net.release('screen');
+    if (!screen.anyWatching()) net.release('screen');
     if (pcScreen.mode === 'off') net.release('share');
     if (!peerApps.view().open && !screen.watching()) net.release('apps');
     if (phoneViews && !phoneViews.list().length && !pendingView) net.release('phone');

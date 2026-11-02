@@ -274,7 +274,7 @@ function setupIpc(ctx) {
     selectDisplay(displayId) {
       settings.sharing.displayId = displayId == null ? null : Number(displayId);
       save();
-      ctx.stream.restart('display selected');
+      ctx.displays.applyVirtual().then(() => ctx.stream.restart('display selected')); // the second display only with the TwinDesk one
     },
     // Extend: Monitor 2 is the TwinDesk virtual display. Mirror: it shows this Mac's main screen.
     setDisplayMode(mode) {
@@ -503,7 +503,7 @@ function setupIpc(ctx) {
     setScreenSound(on) {
       settings.sharing.audio = !!on;
       save();
-      ctx.stream.restart('screen sound');
+      ctx.stream.restartOwn('screen sound'); // only Monitor 2 carries sound
     },
     setApp(partial) {
       setGroup('app', partial);
